@@ -1,0 +1,37 @@
+#!/bin/sh -xeu
+set -xeu
+
+command=''
+
+token="$(printf %s "${command:-$*}" | grep -Eo -- '--token \S+' | grep -Eo -- '\S+$')"
+url="$(printf %s "${command:-$*}" | grep -Eo -- '--url \S+' | grep -Eo -- '\S+$')"
+
+curl -fL https://github.com/emulation-as-a-service/cloud-init-update/raw/main/user-data | sh
+
+apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose bind9-dnsutils
+
+# https://docs.gitlab.com/runner/register/
+docker run --rm \
+  -v /gitlab-runner:/etc/gitlab-runner \
+  gitlab/gitlab-runner register \
+  --non-interactive \
+  --executor "docker" \
+  --docker-image alpine:latest \
+  --url "${url:-https://gitlab.com/}" \
+  --registration-token "$token" \
+  --description "docker-runner" \
+  --tag-list "docker,aws" \
+  --run-untagged="true" \
+  --locked="false" \
+  --access-level="not_protected"
+
+# ip="$(dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')"
+ip="$(dig -4 A +short myip.opendns.com @dns.opendns.com)"
+sed -i '/session_server/alisten_address="0.0.0.0:443"\nadvertise_address="'"$ip"':443"' /gitlab-runner/config.toml
+
+# https://docs.gitlab.com/runner/install/docker.html
+docker run -d --name gitlab-runner --restart always \
+  -v /gitlab-runner:/etc/gitlab-runner \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -p 443:443 \
+  gitlab/gitlab-runner
