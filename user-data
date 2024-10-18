@@ -23,7 +23,11 @@ docker run --rm \
   --tag-list "docker,aws" \
   --run-untagged="true" \
   --locked="false" \
-  --access-level="not_protected"
+  --access-level="not_protected" \
+  `# https://docs.gitlab.com/ee/ci/docker/using_docker_build.html#docker-in-docker-with-tls-enabled-in-the-docker-executor` \
+  --docker-privileged \
+  --docker-volumes "/certs/client" \
+  `#`
 
 # ip="$(dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')"
 ip="$(dig -4 A +short myip.opendns.com @dns.opendns.com)"
