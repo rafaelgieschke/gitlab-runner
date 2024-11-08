@@ -7,5 +7,5 @@
 
 ```
 #!/bin/sh
-curl -fL https://github.com/rafaelgieschke/gitlab-runner/raw/main/user-data | sh -xs -- 
+curl -fL https://github.com/rafaelgieschke/gitlab-runner/raw/docker-in-docker/user-data | sh -xs -- 
 ```
