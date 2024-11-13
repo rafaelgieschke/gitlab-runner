@@ -1,14 +1,13 @@
 #!/bin/sh -xeu
 set -xeu
 
-command=''
-
-token="$(printf %s "${command:-$*}" | grep -Eo -- '--token \S+' | grep -Eo -- '\S+$')"
-url="$(printf %s "${command:-$*}" | grep -Eo -- '--url \S+' | grep -Eo -- '\S+$')"
-
 curl -fL https://github.com/emulation-as-a-service/cloud-init-update/raw/main/user-data | sh
 
 apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose bind9-dnsutils
+
+while case "$1" in gitlab-runner | register) true ;; *) false ;; esac do
+  shift
+done
 
 # https://docs.gitlab.com/runner/register/
 docker run --rm \
@@ -17,13 +16,9 @@ docker run --rm \
   --non-interactive \
   --executor "docker" \
   --docker-image alpine:latest \
-  --url "${url:-https://gitlab.com/}" \
-  --registration-token "$token" \
   --description "docker-runner" \
-  --tag-list "docker,aws" \
-  --run-untagged="true" \
-  --locked="false" \
-  --access-level="not_protected"
+  "$@" \
+  `#`
 
 # ip="$(dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')"
 ip="$(dig -4 A +short myip.opendns.com @dns.opendns.com)"
