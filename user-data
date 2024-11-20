@@ -1,6 +1,19 @@
 #!/bin/sh -xeu
 set -xeu
 
+max_instances=10
+idle_count=3
+flavorRef="7e0d5c26-8e57-42ac-83fe-765fe2621fd7"
+imageRef="aec88dc5-e11a-4477-afc6-4704bd06cdcf"
+network_uuid="59342c0d-5f19-40c2-950b-b84cc1bcc591"
+clouds_yaml="$(
+  cat <<"EOF"
+
+EOF
+)"
+
+plugin_url="https://github.com/sardinasystems/fleeting-plugin-openstack/releases/download/0.22.0/fleeting-plugin-openstack_0.22.0_linux_amd64.tar.gz"
+
 curl -fL https://github.com/emulation-as-a-service/cloud-init-update/raw/main/user-data | sh
 
 apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose bind9-dnsutils
@@ -14,11 +27,75 @@ docker run --rm \
   -v /gitlab-runner:/etc/gitlab-runner \
   gitlab/gitlab-runner register \
   --non-interactive \
-  --executor "docker" \
+  --executor "docker-autoscaler" \
   --docker-image alpine:latest \
   --description "docker-runner" \
   "$@" \
   `#`
+
+curl -L "$plugin_url" | tar xz -C /gitlab-runner --strip-components=1
+
+ssh-keygen -f /gitlab-runner/id_ed25519 -t ed25519 -N ""
+
+cat >>/gitlab-runner/clouds.yaml <<EOF
+$clouds_yaml
+EOF
+
+sed -Ei "s/^concurrent = .*/concurrent = $max_instances/" /gitlab-runner/config.toml
+
+cat >>/gitlab-runner/config.toml <<EOF
+# https://docs.gitlab.com/runner/configuration/advanced-configuration.html
+# https://github.com/sardinasystems/fleeting-plugin-openstack#plugin-configuration
+  [runners.autoscaler]
+    capacity_per_instance = 1
+    max_use_count = 1
+    max_instances = $max_instances
+    plugin = "fleeting-plugin-openstack"
+    update_interval = "0s"
+    update_interval_when_expecting = "0s"
+    [runners.autoscaler.plugin_config]
+      boot_time = "10m"
+      cloud = "openstack"
+      clouds_config = "/etc/gitlab-runner/clouds.yaml"
+      name = "scaling-runner"
+      [runners.autoscaler.plugin_config.server_spec]
+        description = "GitLab CI Docker runners with autoscaling"
+        flavorRef = "$flavorRef"
+        name = "scaling-runner-%d"
+        user_data = '''
+#!/bin/sh
+curl -fL https://github.com/emulation-as-a-service/cloud-init-update/raw/main/user-data | sh
+echo "$(cat /gitlab-runner/id_ed25519.pub)" | install -D -o debian -m 0600 /dev/stdin /home/debian/.ssh/authorized_keys
+apt-get update
+apt-get install -y docker.io
+usermod -aG docker debian
+'''
+        # https://pkg.go.dev/github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers#BlockDevice
+        [[runners.autoscaler.plugin_config.server_spec.block_device_mapping_v2]]
+          source_type = "image"
+          uuid = "$imageRef"
+          delete_on_termination = true
+          destination_type = "volume"
+          volume_size = 50
+          disk_type = "virtio"
+        [[runners.autoscaler.plugin_config.server_spec.networks]]
+          uuid = "$network_uuid"
+    [runners.autoscaler.connector_config]
+      username = "debian"
+      password = ""
+      key_path = "/etc/gitlab-runner/id_ed25519"
+      use_static_credentials = true
+      keepalive = "30s"
+      timeout = "0s"
+      use_external_addr = false
+
+    [[runners.autoscaler.policy]]
+      idle_count = $idle_count
+      idle_time = "120m0s"
+      scale_factor = 3.0
+      scale_factor_limit = 0
+EOF
+
 
 # ip="$(dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')"
 ip="$(dig -4 A +short myip.opendns.com @dns.opendns.com)"
@@ -26,6 +103,7 @@ sed -i '/session_server/alisten_address="0.0.0.0:443"\nadvertise_address="'"$ip"
 
 # https://docs.gitlab.com/runner/install/docker.html
 docker run -d --name gitlab-runner --restart always \
+  -v /gitlab-runner/fleeting-plugin-openstack:/usr/local/bin/fleeting-plugin-openstack \
   -v /gitlab-runner:/etc/gitlab-runner \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -p 443:443 \
