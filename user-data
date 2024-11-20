@@ -99,7 +99,8 @@ EOF
 
 # ip="$(dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')"
 ip="$(dig -4 A +short myip.opendns.com @dns.opendns.com)"
-sed -i '/session_server/alisten_address="0.0.0.0:443"\nadvertise_address="'"$ip"':443"' /gitlab-runner/config.toml
+# TODO: Terminal will currently not work due to https://gitlab.com/gitlab-org/gitlab-runner/-/merge_requests/4875
+# sed -i '/session_server/alisten_address="0.0.0.0:443"\nadvertise_address="'"$ip"':443"' /gitlab-runner/config.toml
 
 # https://docs.gitlab.com/runner/install/docker.html
 docker run -d --name gitlab-runner --restart always \
