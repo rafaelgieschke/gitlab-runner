@@ -1,11 +1,17 @@
 #!/bin/sh -xeu
 set -xeu
 
+# 1. Append the command displayed in "Step 1" (`gitlab-runner register ...`):
+set -- "$@" 
+
+# 2. Adjust OpenStack configuration:
 max_instances=10
 idle_count=3
 flavorRef="7e0d5c26-8e57-42ac-83fe-765fe2621fd7"
 imageRef="aec88dc5-e11a-4477-afc6-4704bd06cdcf"
 network_uuid="59342c0d-5f19-40c2-950b-b84cc1bcc591"
+
+# 3. Select correct OpenStack project > Identity > Application Credentials > Create Application Credential > Download clouds.yaml:
 clouds_yaml="$(
   cat <<"EOF"
 
