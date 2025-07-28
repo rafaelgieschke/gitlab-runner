@@ -20,8 +20,6 @@ EOF
 
 set -- "$@" --docker-privileged --docker-volumes /certs/client
 
-plugin_url="https://github.com/sardinasystems/fleeting-plugin-openstack/releases/download/0.22.0/fleeting-plugin-openstack_0.22.0_linux_amd64.tar.gz"
-
 curl -fL https://github.com/emulation-as-a-service/cloud-init-update/raw/main/user-data | sh
 
 apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose bind9-dnsutils
@@ -41,8 +39,6 @@ docker run --rm \
   "$@" \
   `#`
 
-curl -L "$plugin_url" | tar xz -C /gitlab-runner --strip-components=1
-
 ssh-keygen -f /gitlab-runner/id_ed25519 -t ed25519 -N ""
 
 cat >>/gitlab-runner/clouds.yaml <<EOF
@@ -58,7 +54,7 @@ cat >>/gitlab-runner/config.toml <<EOF
     capacity_per_instance = 1
     max_use_count = 1
     max_instances = $max_instances
-    plugin = "fleeting-plugin-openstack"
+    plugin = "ghcr.io/sardinasystems/fleeting-plugin-openstack"
     update_interval = "0s"
     update_interval_when_expecting = "0s"
     [runners.autoscaler.plugin_config]
@@ -104,16 +100,19 @@ usermod -aG docker debian
       scale_factor_limit = 0
 EOF
 
-
 # ip="$(dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')"
-ip="$(dig -4 A +short myip.opendns.com @dns.opendns.com)"
+# ip="$(dig -4 A +short myip.opendns.com @dns.opendns.com)"
 # TODO: Terminal will currently not work due to https://gitlab.com/gitlab-org/gitlab-runner/-/merge_requests/4875
 # sed -i '/session_server/alisten_address="0.0.0.0:443"\nadvertise_address="'"$ip"':443"' /gitlab-runner/config.toml
 
 # https://docs.gitlab.com/runner/install/docker.html
 docker run -d --name gitlab-runner --restart always \
-  -v /gitlab-runner/fleeting-plugin-openstack:/usr/local/bin/fleeting-plugin-openstack \
   -v /gitlab-runner:/etc/gitlab-runner \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -p 443:443 \
-  gitlab/gitlab-runner
+  `# -p 443:443` \
+  --entrypoint "" \
+  gitlab/gitlab-runner \
+  sh -xeuc '
+    /entrypoint fleeting install --upgrade
+    exec /usr/bin/dumb-init /entrypoint run --user=gitlab-runner --working-directory=/home/gitlab-runner
+  '
