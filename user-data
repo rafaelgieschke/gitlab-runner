@@ -2,9 +2,10 @@
 set -xeu
 
 # 1. Append the command displayed in "Step 1" (`gitlab-runner register ...`):
-set -- "$@" 
+set -- 
 
 # 2. Adjust OpenStack configuration:
+name=scaling-runner
 max_instances=10
 idle_count=3
 flavorRef="7e0d5c26-8e57-42ac-83fe-765fe2621fd7"
@@ -18,101 +19,113 @@ clouds_yaml="$(
 EOF
 )"
 
-set -- "$@" --docker-privileged --docker-volumes /certs/client
+################################################################################
 
 curl -fL https://github.com/emulation-as-a-service/cloud-init-update/raw/main/user-data | sh
 
-apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose bind9-dnsutils
+apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose
 
-while case "$1" in gitlab-runner | register) true ;; *) false ;; esac do
-  shift
-done
+while [ "$#" -gt 0 ]; do case "$1" in
+  --url) url="$2"; shift 2 ;;
+  --token) token="$2"; shift 2 ;;
+  *) shift ;;
+esac; done
 
-# https://docs.gitlab.com/runner/register/
-docker run --rm \
-  -v /gitlab-runner:/etc/gitlab-runner \
-  gitlab/gitlab-runner register \
-  --non-interactive \
-  --executor "docker-autoscaler" \
-  --docker-image alpine:latest \
-  --description "docker-runner" \
-  "$@" \
-  `#`
+mkdir -p /gitlab-runner
 
-ssh-keygen -f /gitlab-runner/id_ed25519 -t ed25519 -N ""
+ssh-keygen -N "" -t ed25519 -f /gitlab-runner/id_ed25519
 
 cat >>/gitlab-runner/clouds.yaml <<EOF
 $clouds_yaml
 EOF
 
-sed -Ei "s/^concurrent = .*/concurrent = $max_instances/" /gitlab-runner/config.toml
-
 cat >>/gitlab-runner/config.toml <<EOF
+concurrent = $max_instances
+check_interval = 0
+shutdown_timeout = 0
+
+[session_server]
+session_timeout = 1800
+
+[[runners]]
+name = "docker-runner"
+url = "$url"
+token = "$token"
+executor = "docker-autoscaler"
+
+[runners.cache]
+MaxUploadedArchiveSize = 0
+
+[runners.docker]
+tls_verify = false
+image = "alpine:latest"
+privileged = true
+disable_entrypoint_overwrite = false
+oom_kill_disable = false
+disable_cache = false
+volumes = ["/certs/client", "/cache"]
+shm_size = 0
+network_mtu = 0
+
 # https://docs.gitlab.com/runner/configuration/advanced-configuration.html
 # https://github.com/sardinasystems/fleeting-plugin-openstack#plugin-configuration
-  [runners.autoscaler]
-    capacity_per_instance = 1
-    max_use_count = 1
-    max_instances = $max_instances
-    plugin = "ghcr.io/sardinasystems/fleeting-plugin-openstack"
-    update_interval = "0s"
-    update_interval_when_expecting = "0s"
-    [runners.autoscaler.plugin_config]
-      boot_time = "10m"
-      cloud = "openstack"
-      clouds_config = "/etc/gitlab-runner/clouds.yaml"
-      name = "scaling-runner"
-      [runners.autoscaler.plugin_config.server_spec]
-        description = "GitLab CI Docker runners with autoscaling"
-        flavorRef = "$flavorRef"
-        name = "scaling-runner-%d"
-        user_data = '''
+[runners.autoscaler]
+capacity_per_instance = 1
+max_use_count = 1
+max_instances = $max_instances
+plugin = "ghcr.io/sardinasystems/fleeting-plugin-openstack"
+update_interval = "0s"
+update_interval_when_expecting = "0s"
+
+[runners.autoscaler.plugin_config]
+boot_time = "10m"
+cloud = "openstack"
+clouds_config = "/etc/gitlab-runner/clouds.yaml"
+name = "$name"
+
+[runners.autoscaler.plugin_config.server_spec]
+description = "GitLab CI Docker runners with autoscaling"
+flavorRef = "$flavorRef"
+name = "$name-%d"
+user_data = '''
 #!/bin/sh
 curl -fL https://github.com/emulation-as-a-service/cloud-init-update/raw/main/user-data | sh
-echo "$(cat /gitlab-runner/id_ed25519.pub)" | install -D -o debian -m 0600 /dev/stdin /home/debian/.ssh/authorized_keys
+cat <<"END" | install -D -o debian -m 0600 /dev/stdin /home/debian/.ssh/authorized_keys
+$(cat /gitlab-runner/id_ed25519.pub)
+END
 apt-get update
 apt-get install -y docker.io
 usermod -aG docker debian
 '''
-        # https://pkg.go.dev/github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers#BlockDevice
-        [[runners.autoscaler.plugin_config.server_spec.block_device_mapping_v2]]
-          source_type = "image"
-          uuid = "$imageRef"
-          delete_on_termination = true
-          destination_type = "volume"
-          volume_size = 50
-          disk_type = "virtio"
-        [[runners.autoscaler.plugin_config.server_spec.networks]]
-          uuid = "$network_uuid"
-    [runners.autoscaler.connector_config]
-      username = "debian"
-      password = ""
-      key_path = "/etc/gitlab-runner/id_ed25519"
-      use_static_credentials = true
-      keepalive = "30s"
-      timeout = "0s"
-      use_external_addr = false
 
-    [[runners.autoscaler.policy]]
-      idle_count = $idle_count
-      idle_time = "120m0s"
-      scale_factor = 3.0
-      scale_factor_limit = 0
+# https://pkg.go.dev/github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers#BlockDevice
+[[runners.autoscaler.plugin_config.server_spec.block_device_mapping_v2]]
+source_type = "image"
+uuid = "$imageRef"
+delete_on_termination = true
+destination_type = "volume"
+volume_size = 50
+disk_type = "virtio"
+
+[[runners.autoscaler.plugin_config.server_spec.networks]]
+uuid = "$network_uuid"
+
+[runners.autoscaler.connector_config]
+username = "debian"
+password = ""
+key_path = "/etc/gitlab-runner/id_ed25519"
+use_static_credentials = true
+keepalive = "30s"
+timeout = "0s"
+use_external_addr = false
+
+[[runners.autoscaler.policy]]
+idle_count = $idle_count
+idle_time = "120m0s"
+scale_factor = 3.0
+scale_factor_limit = 0
 EOF
 
-# ip="$(dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')"
-# ip="$(dig -4 A +short myip.opendns.com @dns.opendns.com)"
-# TODO: Terminal will currently not work due to https://gitlab.com/gitlab-org/gitlab-runner/-/merge_requests/4875
-# sed -i '/session_server/alisten_address="0.0.0.0:443"\nadvertise_address="'"$ip"':443"' /gitlab-runner/config.toml
-
 # https://docs.gitlab.com/runner/install/docker.html
-docker run -d --name gitlab-runner --restart always \
-  -v /gitlab-runner:/etc/gitlab-runner \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  `# -p 443:443` \
-  --entrypoint "" \
-  gitlab/gitlab-runner \
-  sh -xeuc '
-    /entrypoint fleeting install --upgrade
-    exec /usr/bin/dumb-init /entrypoint run --user=gitlab-runner --working-directory=/home/gitlab-runner
-  '
+docker run -d --name gitlab-runner --pull always --restart always -v /gitlab-runner:/etc/gitlab-runner --entrypoint "" gitlab/gitlab-runner sh -xeuc '/entrypoint fleeting install --upgrade; exec /usr/bin/dumb-init /entrypoint run --user=gitlab-runner --working-directory=/home/gitlab-runner'
+
