@@ -31,15 +31,30 @@ while [ "$#" -gt 0 ]; do case "$1" in
   *) shift ;;
 esac; done
 
-mkdir -p /gitlab-runner
+mkdir -p /gitlab-runner/etc
 
-ssh-keygen -N "" -t ed25519 -f /gitlab-runner/id_ed25519
+ssh-keygen -N "" -t ed25519 -f /gitlab-runner/etc/id_ed25519
 
-cat >>/gitlab-runner/clouds.yaml <<EOF
+cat >>/gitlab-runner/compose.yaml <<EOF
+services:
+  # https://docs.gitlab.com/runner/install/docker.html
+  gitlab-runner:
+    container_name: gitlab-runner
+    image: gitlab/gitlab-runner
+    pull_policy: always
+    restart: always
+    entrypoint: ""
+    command: sh -xeuc '/entrypoint fleeting install --upgrade; exec /usr/bin/dumb-init /entrypoint run --user=gitlab-runner --working-directory=/home/gitlab-runner'
+    volumes:
+      - ./etc:/etc/gitlab-runner
+EOF
+
+cat >>/gitlab-runner/etc/clouds.yaml <<EOF
 $clouds_yaml
 EOF
 
-cat >>/gitlab-runner/config.toml <<EOF
+cat >>/gitlab-runner/etc/config.toml <<EOF
+# https://docs.gitlab.com/runner/configuration/advanced-configuration.html
 concurrent = $max_instances
 check_interval = 0
 shutdown_timeout = 0
@@ -48,7 +63,6 @@ shutdown_timeout = 0
 session_timeout = 1800
 
 [[runners]]
-name = "docker-runner"
 url = "$url"
 token = "$token"
 executor = "docker-autoscaler"
@@ -67,8 +81,6 @@ volumes = ["/certs/client", "/cache"]
 shm_size = 0
 network_mtu = 0
 
-# https://docs.gitlab.com/runner/configuration/advanced-configuration.html
-# https://github.com/sardinasystems/fleeting-plugin-openstack#plugin-configuration
 [runners.autoscaler]
 capacity_per_instance = 1
 max_use_count = 1
@@ -77,6 +89,7 @@ plugin = "ghcr.io/sardinasystems/fleeting-plugin-openstack"
 update_interval = "0s"
 update_interval_when_expecting = "0s"
 
+# https://github.com/sardinasystems/fleeting-plugin-openstack#plugin-configuration
 [runners.autoscaler.plugin_config]
 boot_time = "10m"
 cloud = "openstack"
@@ -91,7 +104,7 @@ user_data = '''
 #!/bin/sh
 curl -fL https://github.com/emulation-as-a-service/cloud-init-update/raw/main/user-data | sh
 cat <<"END" | install -D -o debian -m 0600 /dev/stdin /home/debian/.ssh/authorized_keys
-$(cat /gitlab-runner/id_ed25519.pub)
+$(cat /gitlab-runner/etc/id_ed25519.pub)
 END
 apt-get update
 apt-get install -y docker.io
@@ -126,6 +139,5 @@ scale_factor = 3.0
 scale_factor_limit = 0
 EOF
 
-# https://docs.gitlab.com/runner/install/docker.html
-docker run -d --name gitlab-runner --pull always --restart always -v /gitlab-runner:/etc/gitlab-runner --entrypoint "" gitlab/gitlab-runner sh -xeuc '/entrypoint fleeting install --upgrade; exec /usr/bin/dumb-init /entrypoint run --user=gitlab-runner --working-directory=/home/gitlab-runner'
+$(command -v docker-compose || echo docker compose) -f /gitlab-runner/compose.yaml up -d
 
